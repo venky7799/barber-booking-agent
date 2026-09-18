@@ -163,6 +163,8 @@ Temporary tokens expire (~24 hours or less). Paste a new token into `.env` and r
 
 The bot uses the **sender WhatsApp number** as the customer id (never asks for it). **Max 4 upcoming confirmed** bookings per number; after one is cancelled or the appointment time has passed, they can book again.
 
+Shop **Hours** in the Google Sheet drive the WhatsApp time list (booked slots are hidden). If a time is taken while they are choosing, they get a fresh list for that day and pick another.
+
 ---
 
 ## 7. Google Sheets + Google Calendar

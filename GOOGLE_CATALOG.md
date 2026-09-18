@@ -15,7 +15,7 @@ The **Customer** column is the WhatsApp (or call) From number. The bot does not 
 | **Shop** | `key`, `value` — `name`, `code`, `greeting`, `confirmation`, `timezone`, `currency` (`INR`), `bufferMinutes`, `sameDayCutoffMinutes` |
 | **Services** | `id`, `name`, `durationMinutes`, `price` — for INR, `price` is **rupees** (350 = ₹350) |
 | **Barbers** | `id`, `name` |
-| **Hours** | `day` (`mon`…`sun`), `open`, `close` (`10:00`) |
+| **Hours** | `day` (`mon`…`sun`), `open`, `close` (`10:00`) — WhatsApp only lists **free** times inside these hours. Booked slots are omitted. Change hours here, then wait for sync (or `POST /catalog/sync`). If two people tap the same time, the second is told it was booked and shown the remaining times that day. |
 | **Questions** | `id`, `prompt`, `type` (`single_choice` / `yes_no` / `short_text`), `options` (comma-separated), `required` |
 
 If those tabs are missing, the app **creates them** on boot with an Indian Fade Room example.
