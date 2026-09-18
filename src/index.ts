@@ -3,6 +3,7 @@ import { config as loadEnv } from "dotenv";
 import { migrate } from "./db.js";
 import { seedDemoShops } from "./seed.js";
 import { apiRouter } from "./routes.js";
+import { bindFadeRoomWhatsApp } from "./whatsapp-bind.js";
 
 loadEnv();
 migrate();
@@ -11,6 +12,12 @@ seedDemoShops();
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
+app.use((req, _res, next) => {
+  if (req.path.startsWith("/webhooks")) {
+    console.log(`[http] ${req.method} ${req.path}`);
+  }
+  next();
+});
 
 app.use(apiRouter);
 
@@ -38,4 +45,5 @@ app.get("/", (_req, res) => {
 const port = Number(process.env.PORT || 3000);
 app.listen(port, "127.0.0.1", () => {
   console.log(`Barber booking agent listening on http://localhost:${port}`);
+  void bindFadeRoomWhatsApp().catch((err) => console.error("[whatsapp] bind failed", err));
 });

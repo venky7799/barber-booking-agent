@@ -10,15 +10,25 @@
     "build": "tsc",
     "seed": "tsx src/seed-cli.ts",
     "demo:book": "tsx src/scripts/demo-book.ts",
+    "whatsapp:webhook": "tsx src/scripts/register-whatsapp-webhook.ts",
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["barber", "booking", "whatsapp", "twilio", "ivr"],
+  "keywords": [
+    "barber",
+    "booking",
+    "whatsapp",
+    "twilio",
+    "ivr"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@langchain/core": "^1.2.11",
+    "@langchain/openai": "^1.5.13",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^18.0.0",
     "express": "^5.2.1",
+    "googleapis": "^181.0.0",
     "twilio": "^6.1.1",
     "uuid": "^14.0.2",
     "zod": "^4.6.5"

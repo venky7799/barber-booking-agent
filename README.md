@@ -1,5 +1,9 @@
 # Barber Shop Booking Agent
 
+**First time?** Follow **[HOW_TO_START.md](HOW_TO_START.md)** (install → local demo → WhatsApp → Google → Twilio).
+
+**Going live?** Follow **[DEPLOY.md](DEPLOY.md)**. **Free hosts:** **[FREE_DEPLOY.md](FREE_DEPLOY.md)**. Vercel is **not** a drop-in host; see **[VERCEL.md](VERCEL.md)**.
+
 Cost-optimized, multi-tenant booking agent for barber shops over **WhatsApp** and **phone calls**. Each shop configures its own services, staff, hours, and personalized intake questions — no code changes to onboard a new shop.
 
 ## Why it stays cheap

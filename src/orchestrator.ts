@@ -14,7 +14,8 @@ import {
   releaseSessionLocks,
   upcomingDateChoices,
 } from "./slots.js";
-import { interpretDate, interpretFuzzyChoice } from "./llm.js";
+import { interpretFuzzyChoice } from "./llm.js";
+import { syncBookingToGoogle } from "./google-sync.js";
 import type {
   Channel,
   OrchestratorReply,
@@ -22,6 +23,47 @@ import type {
   Shop,
   ShopQuestion,
 } from "./types.js";
+
+function isGreeting(text: string): boolean {
+  return /^(hi+|hii+|hello|hey+|heya|yo|hola|sup|good (morning|afternoon|evening)|thanks|thank you|namaste)\.?$/.test(
+    normalize(text)
+  );
+}
+
+function wantsAvailability(text: string): boolean {
+  return /\b(list\s+of\s+)?slots?\b|\btimings?\b|\bavailable(\s+(times?|slots?))?\b|\bopenings?\b|\bwhat times?\b/i.test(
+    text
+  );
+}
+
+function stashAndListSlots(shop: Shop, session: Session, dateId: string, channel: Channel): OrchestratorReply {
+  const slots = getAvailableSlots(
+    shop,
+    dateId,
+    session.draft.serviceId!,
+    session.draft.barberId || null
+  );
+  if (slots.length === 0) {
+    session.step = "await_date";
+    return {
+      text: "No openings that day. Pick another date.",
+      step: "await_date",
+      choices: upcomingDateChoices(shop.config),
+      choiceMode: channel === "voice" ? "dtmf" : "list",
+    };
+  }
+  const shown = slots.slice(0, 10);
+  session.draft.answers.__slots = shown.map((s) => `${s.start}|${s.end}|${s.barberId || ""}`);
+  session.step = "await_time";
+  const choices = shown.map((s, i) => ({ id: String(i + 1), title: s.label }));
+  const numbered = choices.map((c) => `${c.id}. ${c.title}`).join("\n");
+  return {
+    text: `Open slots:\n${numbered}\n\nReply with a number or tap Choose.`,
+    step: "await_time",
+    choices,
+    choiceMode: channel === "voice" ? "dtmf" : "list",
+  };
+}
 
 function money(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
@@ -66,6 +108,42 @@ function matchChoice(
   return null;
 }
 
+function matchClosedKeywords(
+  text: string,
+  choices: Array<{ id: string; title: string }>
+): string | null {
+  const t = normalize(text);
+  if (!t) return null;
+  const ids = new Set(choices.map((c) => c.id));
+
+  const yes = new Set(["yes", "y", "yeah", "yep", "ok", "okay", "sure"]);
+  const no = new Set(["no", "n", "nope", "nah"]);
+  if (ids.has("yes") && yes.has(t)) return "yes";
+  if (ids.has("no") && no.has(t)) return "no";
+
+  const book = new Set(["book", "booking", "appointment", "appoint"]);
+  const cancel = new Set(["cancel", "cancelled", "canceled"]);
+  const reschedule = new Set(["reschedule", "change", "move"]);
+  if (ids.has("book") && book.has(t)) return "book";
+  if (ids.has("cancel") && cancel.has(t)) return "cancel";
+  if (ids.has("reschedule") && reschedule.has(t)) return "reschedule";
+
+  const today = formatDate(new Date());
+  const tomorrowDate = new Date();
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = formatDate(tomorrowDate);
+  if (t === "today" && ids.has(today)) return today;
+  if (t === "tomorrow" && ids.has(tomorrow)) return tomorrow;
+
+  const weekday = t.slice(0, 3);
+  const days = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+  if (days.includes(weekday) && t.length >= 3) {
+    const hit = choices.find((c) => normalize(c.title).startsWith(weekday) || normalize(c.id).includes(weekday));
+    if (hit) return hit.id;
+  }
+  return null;
+}
+
 async function resolveChoice(
   text: string,
   prompt: string,
@@ -74,7 +152,9 @@ async function resolveChoice(
 ): Promise<string | null> {
   const direct = matchChoice(text, choices, dtmf);
   if (direct) return direct;
-  if (!text.trim()) return null;
+  const closed = matchClosedKeywords(text, choices);
+  if (closed) return closed;
+  if (!text.trim() || isGreeting(text)) return null;
   return interpretFuzzyChoice({ userText: text, prompt, choices });
 }
 
@@ -185,7 +265,7 @@ export async function handleTurn(params: {
   const lower = normalize(text);
 
   // Global restart / greetings with an assigned shop
-  if (["restart", "start over", "menu"].includes(lower)) {
+  if (["restart", "start over", "menu"].includes(lower) || isGreeting(text)) {
     releaseSessionLocks(session.id);
     resetSession(session, session.shopId);
     shop = session.shopId ? getShopById(session.shopId) : null;
@@ -234,6 +314,39 @@ export async function handleTurn(params: {
     session.lastPrompt = reply.text;
     saveSession(session);
     return { reply, session, shop: null };
+  }
+
+  if (wantsAvailability(text) && shop) {
+    if (session.draft.serviceId && session.draft.date) {
+      const reply = stashAndListSlots(shop, session, session.draft.date, params.channel);
+      session.lastPrompt = reply.text;
+      saveSession(session);
+      return { reply, session, shop };
+    }
+    if (session.draft.serviceId) {
+      session.step = "await_date";
+      const dates = upcomingDateChoices(shop.config);
+      const reply: OrchestratorReply = {
+        text: "Pick a day and I'll list open slots.",
+        step: "await_date",
+        choices: dates,
+        choiceMode: params.channel === "voice" ? "dtmf" : "list",
+      };
+      session.lastPrompt = reply.text;
+      saveSession(session);
+      return { reply, session, shop };
+    }
+    session.draft = emptyDraft();
+    session.step = "await_service";
+    const reply: OrchestratorReply = {
+      text: "Pick a service first — then a day — and I'll list open slots.",
+      step: "await_service",
+      choices: serviceChoices(shop),
+      choiceMode: params.channel === "voice" ? "dtmf" : "list",
+    };
+    session.lastPrompt = reply.text;
+    saveSession(session);
+    return { reply, session, shop };
   }
 
   // Intent
@@ -384,13 +497,6 @@ export async function handleTurn(params: {
   if (session.step === "await_date") {
     const dates = upcomingDateChoices(shop.config);
     let dateId = await resolveChoice(text, "Pick a date", dates, params.dtmf);
-    if (!dateId && text.trim()) {
-      dateId = await interpretDate({
-        userText: text,
-        today: formatDate(new Date()),
-        validDates: dates.map((d) => d.id),
-      });
-    }
     if (!dateId) {
       const reply: OrchestratorReply = {
         text: "Please choose a date from the list.",
@@ -403,37 +509,7 @@ export async function handleTurn(params: {
       return { reply, session, shop };
     }
     session.draft.date = dateId;
-    const slots = getAvailableSlots(
-      shop,
-      dateId,
-      session.draft.serviceId!,
-      session.draft.barberId || null
-    );
-    if (slots.length === 0) {
-      session.step = "await_date";
-      const reply: OrchestratorReply = {
-        text: "No openings that day. Pick another date.",
-        step: "await_date",
-        choices: dates,
-        choiceMode: params.channel === "voice" ? "dtmf" : "list",
-      };
-      session.lastPrompt = reply.text;
-      saveSession(session);
-      return { reply, session, shop };
-    }
-    session.step = "await_time";
-    const choices = slots.slice(0, 10).map((s, i) => ({
-      id: String(i + 1),
-      title: s.label,
-    }));
-    // stash slot map on draft answers temporarily
-    session.draft.answers.__slots = slots.slice(0, 10).map((s) => `${s.start}|${s.end}|${s.barberId || ""}`);
-    const reply: OrchestratorReply = {
-      text: "Pick a time:",
-      step: "await_time",
-      choices,
-      choiceMode: params.channel === "voice" ? "dtmf" : "list",
-    };
+    const reply = stashAndListSlots(shop, session, dateId, params.channel);
     session.lastPrompt = reply.text;
     saveSession(session);
     return { reply, session, shop };
@@ -643,6 +719,7 @@ export async function handleTurn(params: {
         endsAt: end,
         answers,
       });
+      void syncBookingToGoogle(shop, booking);
       resetSession(session, shop.id);
       const reply: OrchestratorReply = {
         text: `${shop.config.confirmation}\nReference: ${booking.reference}\nWhen: ${new Date(

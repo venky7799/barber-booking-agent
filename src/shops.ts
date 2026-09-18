@@ -45,9 +45,15 @@ export function getShopByCode(code: string): Shop | null {
 
 export function getShopByWhatsappNumber(number: string): Shop | null {
   const normalized = number.replace(/\D/g, "");
-  const rows = listShops();
+  if (!normalized) return null;
+  const rows = listShops().filter((s) => s.whatsappNumber);
+  const exact = rows.find((s) => s.whatsappNumber!.replace(/\D/g, "") === normalized);
+  if (exact) return exact;
   return (
-    rows.find((s) => s.whatsappNumber && s.whatsappNumber.replace(/\D/g, "") === normalized) || null
+    rows.find((s) => {
+      const n = s.whatsappNumber!.replace(/\D/g, "");
+      return n.length >= 8 && normalized.length >= 8 && (n.endsWith(normalized) || normalized.endsWith(n));
+    }) || null
   );
 }
 

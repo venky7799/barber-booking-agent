@@ -6,10 +6,10 @@ function enabled(): boolean {
   return Boolean(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
 }
 
-async function sendPayload(payload: Record<string, unknown>): Promise<void> {
+async function sendPayload(payload: Record<string, unknown>): Promise<boolean> {
   if (!enabled()) {
     console.log("[whatsapp:dry-run]", JSON.stringify(payload));
-    return;
+    return true;
   }
   const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID!;
   const res = await fetch(`${GRAPH}/${phoneId}/messages`, {
@@ -23,14 +23,39 @@ async function sendPayload(payload: Record<string, unknown>): Promise<void> {
   if (!res.ok) {
     const body = await res.text();
     console.error("[whatsapp] send failed", res.status, body);
+    return false;
   }
+  return true;
+}
+
+function numberedChoices(reply: OrchestratorReply): string {
+  if (!reply.choices?.length) return reply.text.slice(0, 4096);
+  const lines = reply.choices.map((c, i) => `${i + 1}. ${c.title}`).join("\n");
+  return `${reply.text}\n\n${lines}`.slice(0, 4096);
+}
+
+function uniqueListRows(choices: NonNullable<OrchestratorReply["choices"]>) {
+  const seen = new Set<string>();
+  return choices.slice(0, 10).map((c, i) => {
+    let title = c.title.slice(0, 24).trim() || `Option ${i + 1}`;
+    if (seen.has(title)) title = `${title.slice(0, 20)} ${i + 1}`.slice(0, 24);
+    seen.add(title);
+    return { id: c.id.slice(0, 200) || String(i + 1), title };
+  });
 }
 
 export async function sendWhatsAppReply(to: string, reply: OrchestratorReply): Promise<void> {
   const toDigits = to.replace(/\D/g, "");
+  const asText = () =>
+    sendPayload({
+      messaging_product: "whatsapp",
+      to: toDigits,
+      type: "text",
+      text: { body: numberedChoices(reply) },
+    });
 
   if (reply.choices && reply.choices.length > 0 && reply.choices.length <= 3 && reply.choiceMode === "buttons") {
-    await sendPayload({
+    const ok = await sendPayload({
       messaging_product: "whatsapp",
       to: toDigits,
       type: "interactive",
@@ -45,36 +70,32 @@ export async function sendWhatsAppReply(to: string, reply: OrchestratorReply): P
         },
       },
     });
+    if (ok) return;
+    await asText();
     return;
   }
 
   if (reply.choices && reply.choices.length > 0) {
-    const rows = reply.choices.slice(0, 10).map((c) => ({
-      id: c.id.slice(0, 200),
-      title: c.title.slice(0, 24),
-    }));
-    await sendPayload({
+    const rows = uniqueListRows(reply.choices);
+    const ok = await sendPayload({
       messaging_product: "whatsapp",
       to: toDigits,
       type: "interactive",
       interactive: {
         type: "list",
-        body: { text: reply.text.slice(0, 1024) },
+        body: { text: numberedChoices(reply).slice(0, 1024) },
         action: {
           button: "Choose",
           sections: [{ title: "Options", rows }],
         },
       },
     });
+    if (ok) return;
+    await asText();
     return;
   }
 
-  await sendPayload({
-    messaging_product: "whatsapp",
-    to: toDigits,
-    type: "text",
-    text: { body: reply.text.slice(0, 4096) },
-  });
+  await asText();
 }
 
 export function extractWhatsAppInbound(body: unknown): Array<{
@@ -108,7 +129,13 @@ export function extractWhatsAppInbound(body: unknown): Array<{
   for (const entry of root.entry || []) {
     for (const change of entry.changes || []) {
       const value = change.value;
-      const to = value?.metadata?.display_phone_number;
+      const display = value?.metadata?.display_phone_number;
+      const phoneId = value?.metadata?.phone_number_id;
+      const to =
+        display ||
+        (phoneId && phoneId === process.env.WHATSAPP_PHONE_NUMBER_ID
+          ? process.env.WHATSAPP_BUSINESS_NUMBER || undefined
+          : undefined);
       for (const msg of value?.messages || []) {
         let text = "";
         if (msg.type === "text") text = msg.text?.body || "";
