@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { google } from "googleapis";
 import type { Booking, Shop } from "./types.js";
 
@@ -48,23 +49,33 @@ export function googleAuth() {
   return auth();
 }
 
-function credentials() {
-  const path = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (path?.trim()) return undefined;
+function jsonCredentials(): { private_key?: string; client_email?: string } | null {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
-  if (raw && raw.startsWith("{")) {
-    const parsed = JSON.parse(raw) as { private_key?: string; client_email?: string };
-    if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
-    return parsed;
-  }
-  return null;
+  if (!raw || !raw.startsWith("{")) return null;
+  const parsed = JSON.parse(raw) as { private_key?: string; client_email?: string };
+  if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+  return parsed;
+}
+
+function keyFilePath(): string | undefined {
+  const path = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
+  if (path && existsSync(path)) return path;
+  return undefined;
 }
 
 function auth() {
-  const creds = credentials();
-  if (creds === null && !process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim()) return null;
+  const creds = jsonCredentials();
+  const keyFile = keyFilePath();
+  if (!creds && !keyFile) {
+    if (process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim()) {
+      console.warn(
+        "[google] credential file is not on this host; set GOOGLE_SERVICE_ACCOUNT_JSON to the JSON contents"
+      );
+    }
+    return null;
+  }
   return new google.auth.GoogleAuth({
-    ...(creds ? { credentials: creds } : { keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS }),
+    ...(creds ? { credentials: creds } : { keyFile }),
     scopes: [
       "https://www.googleapis.com/auth/spreadsheets",
       "https://www.googleapis.com/auth/calendar",
