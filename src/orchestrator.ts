@@ -69,7 +69,16 @@ function hoursLine(shop: Shop, dateId: string): string {
   return `Shop hours ${names[dt.getDay()]} ${hours.open}–${hours.close} (from the shop sheet).\n`;
 }
 
-function stashAndListSlots(shop: Shop, session: Session, dateId: string, channel: Channel): OrchestratorReply {
+const MORE_TIMES_ID = "__more";
+const SLOT_PAGE_SIZE = 9;
+
+function stashAndListSlots(
+  shop: Shop,
+  session: Session,
+  dateId: string,
+  channel: Channel,
+  resetPage = true
+): OrchestratorReply {
   const slots = getAvailableSlots(
     shop,
     dateId,
@@ -78,6 +87,7 @@ function stashAndListSlots(shop: Shop, session: Session, dateId: string, channel
   );
   if (slots.length === 0) {
     session.step = "await_date";
+    delete session.draft.answers.__slotPage;
     return {
       text: "No openings that day. Pick another date.",
       step: "await_date",
@@ -85,17 +95,42 @@ function stashAndListSlots(shop: Shop, session: Session, dateId: string, channel
       choiceMode: channel === "voice" ? "dtmf" : "list",
     };
   }
-  const shown = channel === "voice" ? slots.slice(0, 9) : slots;
-  session.draft.answers.__slots = shown.map((s) => `${s.start}|${s.end}|${s.barberId || ""}`);
+  session.draft.answers.__slots = slots.map((s) => `${s.start}|${s.end}|${s.barberId || ""}`);
+  if (resetPage) session.draft.answers.__slotPage = "0";
   session.step = "await_time";
-  const choices = shown.map((s, i) => ({ id: String(i + 1), title: s.label }));
-  const numbered = choices.map((c) => `${c.id}. ${c.title}`).join("\n");
-  const mode = channel === "voice" ? "dtmf" : shown.length <= 10 ? "list" : "text";
+
+  if (channel === "voice") {
+    const shown = slots.slice(0, 9);
+    const choices = shown.map((s, i) => ({ id: String(i + 1), title: s.label }));
+    const numbered = choices.map((c) => `${c.id}. ${c.title}`).join("\n");
+    return {
+      text: `${hoursLine(shop, dateId)}Open slots (booked times are hidden):\n${numbered}\n\nPress a number.`,
+      step: "await_time",
+      choices,
+      choiceMode: "dtmf",
+    };
+  }
+
+  const page = Math.max(0, Number(session.draft.answers.__slotPage) || 0);
+  let startIdx = page * SLOT_PAGE_SIZE;
+  if (startIdx >= slots.length) {
+    session.draft.answers.__slotPage = "0";
+    startIdx = 0;
+  }
+  const leftover = slots.length - startIdx;
+  const take = leftover > 10 ? SLOT_PAGE_SIZE : leftover;
+  const slice = slots.slice(startIdx, startIdx + take);
+  const choices = slice.map((s, i) => ({ id: String(startIdx + i + 1), title: s.label }));
+  if (startIdx + slice.length < slots.length) {
+    choices.push({ id: MORE_TIMES_ID, title: "More times" });
+  }
+  const from = startIdx + 1;
+  const to = startIdx + slice.length;
   return {
-    text: `${hoursLine(shop, dateId)}Open slots (booked times are hidden):\n${numbered}\n\nReply with a number${mode === "list" ? " or tap Choose" : ""}.`,
+    text: `${hoursLine(shop, dateId)}Open slots ${from}–${to} of ${slots.length} (booked times are hidden). Tap Choose to pick a time, tap More times for later slots, or reply with a number 1–${slots.length}.`,
     step: "await_time",
     choices,
-    choiceMode: mode,
+    choiceMode: "list",
   };
 }
 
@@ -722,7 +757,27 @@ export async function handleTurn(params: {
       const label = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
       return { id: String(i + 1), title: label };
     });
-    const picked = await resolveChoice(text, "Pick a time", choices, params.dtmf);
+    if (matchChoice(text, [{ id: MORE_TIMES_ID, title: "More times" }], params.dtmf) === MORE_TIMES_ID) {
+      session.draft.answers.__slotPage = String((Number(session.draft.answers.__slotPage) || 0) + 1);
+      const dateId = session.draft.date;
+      if (!dateId || !session.draft.serviceId) {
+        session.step = "await_date";
+        const reply: OrchestratorReply = {
+          text: "Which day works for you?",
+          step: "await_date",
+          choices: upcomingDateChoices(shop.config),
+          choiceMode: params.channel === "voice" ? "dtmf" : "list",
+        };
+        session.lastPrompt = reply.text;
+        saveSession(session);
+        return { reply, session, shop };
+      }
+      const reply = stashAndListSlots(shop, session, dateId, params.channel, false);
+      session.lastPrompt = reply.text;
+      saveSession(session);
+      return { reply, session, shop };
+    }
+    const picked = matchChoice(text, choices, params.dtmf);
     if (!picked) {
       const nudged = await applyBookingNudge(shop, session, params.channel, text);
       if (nudged === "cancel") {
@@ -743,12 +798,24 @@ export async function handleTurn(params: {
         saveSession(session);
         return { reply: nudged, session, shop };
       }
-      const reply: OrchestratorReply = {
-        text: "Please pick a time from the list, or say who you want (for example a barber by name).",
-        step: "await_time",
-        choices,
-        choiceMode: params.channel === "voice" ? "dtmf" : choices.length > 10 ? "text" : "list",
-      };
+      const dateId = session.draft.date;
+      let reply: OrchestratorReply;
+      if (dateId) {
+        reply = stashAndListSlots(shop, session, dateId, params.channel, false);
+        if (reply.step === "await_time") {
+          reply = {
+            ...reply,
+            text: `Please pick a time, tap More times, or say who you want.\n\n${reply.text}`,
+          };
+        }
+      } else {
+        reply = {
+          text: "Please pick a time from the list, or say who you want (for example a barber by name).",
+          step: "await_time",
+          choices,
+          choiceMode: params.channel === "voice" ? "dtmf" : "list",
+        };
+      }
       session.lastPrompt = reply.text;
       saveSession(session);
       return { reply, session, shop };
