@@ -43,7 +43,8 @@ app.get("/", (_req, res) => {
 });
 
 const port = Number(process.env.PORT || 3000);
-app.listen(port, "127.0.0.1", () => {
-  console.log(`Barber booking agent listening on http://localhost:${port}`);
+const host = process.env.HOST || "0.0.0.0";
+app.listen(port, host, () => {
+  console.log(`Barber booking agent listening on http://${host}:${port}`);
   void bindFadeRoomWhatsApp().catch((err) => console.error("[whatsapp] bind failed", err));
 });

@@ -4,6 +4,9 @@
   "description": "Cost-optimized multi-tenant barber booking agent for WhatsApp and phone calls",
   "type": "module",
   "main": "dist/index.js",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",

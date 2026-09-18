@@ -36,7 +36,7 @@ Good for a **demo**. The free instance **spins down after ~15 minutes** of no tr
 3. **New** → **Web Service** → select the repo.
 4. Settings:
    - **Runtime:** Node
-   - **Build:** `npm install && npm run build`
+   - **Build:** `npm install && npm run build` (required — `dist/` is not in git)
    - **Start:** `npm start`
    - **Instance:** Free
 5. **Environment** → add the same keys as `.env.example` (see [DEPLOY.md](DEPLOY.md)). Do not use Mac file paths for Google JSON; paste `GOOGLE_SERVICE_ACCOUNT_JSON`.
