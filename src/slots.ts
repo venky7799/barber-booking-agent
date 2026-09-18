@@ -140,7 +140,7 @@ export function getAvailableSlots(
     }
   }
 
-  return slots.slice(0, 40);
+  return slots.slice(0, 80);
 }
 
 export function lockSlot(params: {
