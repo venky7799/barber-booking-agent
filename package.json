@@ -9,8 +9,9 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "start": "node serve.js",
     "build": "tsc",
+    "postinstall": "tsc",
     "seed": "tsx src/seed-cli.ts",
     "demo:book": "tsx src/scripts/demo-book.ts",
     "whatsapp:webhook": "tsx src/scripts/register-whatsapp-webhook.ts",
@@ -33,6 +34,7 @@
     "express": "^5.2.1",
     "googleapis": "^181.0.0",
     "twilio": "^6.1.1",
+    "typescript": "^7.0.2",
     "uuid": "^14.0.2",
     "zod": "^4.6.5"
   },
@@ -41,7 +43,6 @@
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.1",
     "@types/uuid": "^10.0.0",
-    "tsx": "^4.23.13",
-    "typescript": "^7.0.2"
+    "tsx": "^4.23.13"
   }
 }
