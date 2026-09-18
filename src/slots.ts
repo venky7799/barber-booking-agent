@@ -5,6 +5,26 @@ import type { Booking, Channel, Shop, ShopConfig, Slot, Weekday } from "./types.
 
 const WEEKDAYS: Weekday[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
+/** Confirmed visits still in the future. Cancelled and past starts do not count. */
+export const MAX_ACTIVE_BOOKINGS_PER_NUMBER = 4;
+
+export function normalizeCustomerId(raw: string): string {
+  return raw.replace(/\D/g, "") || raw.trim();
+}
+
+export function countActiveBookings(customerExternalId: string): number {
+  const id = normalizeCustomerId(customerExternalId);
+  const now = new Date().toISOString();
+  const rows = db
+    .prepare(`SELECT customer_external_id FROM bookings WHERE status = 'confirmed' AND starts_at > ?`)
+    .all(now) as Array<{ customer_external_id: string }>;
+  return rows.filter((r) => normalizeCustomerId(r.customer_external_id) === id).length;
+}
+
+export function atBookingCap(customerExternalId: string): boolean {
+  return countActiveBookings(customerExternalId) >= MAX_ACTIVE_BOOKINGS_PER_NUMBER;
+}
+
 function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
@@ -203,11 +223,16 @@ export function confirmBooking(params: {
   });
   if (conflict) throw new Error("Slot unavailable");
 
+  const customerId = normalizeCustomerId(params.customerExternalId);
+  if (atBookingCap(customerId)) {
+    throw new Error("Booking cap");
+  }
+
   const booking: Booking = {
     id: uuid(),
     shopId: params.shopId,
     reference: makeReference(),
-    customerExternalId: params.customerExternalId,
+    customerExternalId: customerId,
     channel: params.channel,
     serviceId: params.serviceId,
     barberId: params.barberId,
@@ -244,9 +269,10 @@ export function confirmBooking(params: {
 }
 
 export function cancelBooking(reference: string, customerExternalId: string): Booking | null {
+  const id = normalizeCustomerId(customerExternalId);
   const row = db
-    .prepare("SELECT * FROM bookings WHERE reference = ? AND customer_external_id = ?")
-    .get(reference, customerExternalId) as
+    .prepare("SELECT * FROM bookings WHERE reference = ?")
+    .get(reference) as
     | {
         id: string;
         shop_id: string;
@@ -262,7 +288,7 @@ export function cancelBooking(reference: string, customerExternalId: string): Bo
         created_at: string;
       }
     | undefined;
-  if (!row) return null;
+  if (!row || normalizeCustomerId(row.customer_external_id) !== id) return null;
   db.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(row.id);
   return {
     id: row.id,

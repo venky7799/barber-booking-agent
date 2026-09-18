@@ -6,11 +6,14 @@ import {
 } from "./shops.js";
 import { emptyDraft, getOrCreateSession, resetSession, saveSession } from "./sessions.js";
 import {
+  atBookingCap,
   cancelBooking,
   confirmBooking,
+  countActiveBookings,
   formatDate,
   getAvailableSlots,
   lockSlot,
+  MAX_ACTIVE_BOOKINGS_PER_NUMBER,
   releaseSessionLocks,
   upcomingDateChoices,
 } from "./slots.js";
@@ -165,6 +168,16 @@ async function resolveChoice(
   if (closed) return closed;
   if (!text.trim() || isGreeting(text)) return null;
   return interpretFuzzyChoice({ userText: text, prompt, choices });
+}
+
+function bookingCapReply(channel: Channel, customerExternalId: string): OrchestratorReply {
+  const n = countActiveBookings(customerExternalId);
+  return {
+    text: `This number already has ${n} upcoming booking${n === 1 ? "" : "s"} (max ${MAX_ACTIVE_BOOKINGS_PER_NUMBER}). Cancel one or wait until a visit is done, then you can book again.`,
+    step: "await_intent",
+    choices: intentChoices(),
+    choiceMode: channel === "voice" ? "dtmf" : "buttons",
+  };
 }
 
 function intentChoices(): Array<{ id: string; title: string }> {
@@ -390,6 +403,12 @@ export async function handleTurn(params: {
         choices: intentChoices(),
         choiceMode: params.channel === "voice" ? "dtmf" : "buttons",
       };
+      session.lastPrompt = reply.text;
+      saveSession(session);
+      return { reply, session, shop };
+    }
+    if (atBookingCap(params.externalId)) {
+      const reply = bookingCapReply(params.channel, params.externalId);
       session.lastPrompt = reply.text;
       saveSession(session);
       return { reply, session, shop };
@@ -717,6 +736,14 @@ export async function handleTurn(params: {
     );
 
     try {
+      if (atBookingCap(params.externalId)) {
+        releaseSessionLocks(session.id);
+        resetSession(session, shop.id);
+        const reply = bookingCapReply(params.channel, params.externalId);
+        session.lastPrompt = reply.text;
+        saveSession(session);
+        return { reply, session, shop };
+      }
       const booking = confirmBooking({
         shopId: shop.id,
         sessionId: session.id,
@@ -742,8 +769,15 @@ export async function handleTurn(params: {
       session.step = "await_intent";
       saveSession(session);
       return { reply, session, shop };
-    } catch {
+    } catch (err) {
       releaseSessionLocks(session.id);
+      if (err instanceof Error && err.message === "Booking cap") {
+        resetSession(session, shop.id);
+        const reply = bookingCapReply(params.channel, params.externalId);
+        session.lastPrompt = reply.text;
+        saveSession(session);
+        return { reply, session, shop };
+      }
       session.step = "await_date";
       session.draft = emptyDraft();
       const dates = upcomingDateChoices(shop.config);

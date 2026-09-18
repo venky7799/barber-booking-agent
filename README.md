@@ -59,6 +59,12 @@ Config includes `services`, `barbers`, `hours`, `questions`, greetings, `timezon
 
 Existing shops do not pick up `src/seed.ts` changes. Update live config with `PUT /shops/:id/config` (see `GET /shops` for the id).
 
+## Guardrails
+
+- Customer identity is the **WhatsApp or call From number**. The bot never asks for a phone.
+- That number is stored on the booking and in the Google Sheet **Customer** column.
+- **At most 4 upcoming confirmed** bookings per number (across shops). Cancelled and completed visits do not count, so they can book again until they are back at 4.
+
 ```http
 POST /shops
 GET  /shops
