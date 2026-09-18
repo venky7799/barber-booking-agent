@@ -40,6 +40,22 @@ function wantsAvailability(text: string): boolean {
   );
 }
 
+function parseClockHint(text: string): { hours: number; minutes: number } | null {
+  const t = normalize(text);
+  const ampm = t.match(/\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)\b/);
+  if (ampm) {
+    let hours = Number(ampm[1]);
+    const minutes = Number(ampm[2] || 0);
+    const mer = ampm[3].replace(/\./g, "")[0];
+    if (mer === "p" && hours < 12) hours += 12;
+    if (mer === "a" && hours === 12) hours = 0;
+    if (hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59) return { hours, minutes };
+  }
+  const hm = t.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
+  if (hm) return { hours: Number(hm[1]), minutes: Number(hm[2]) };
+  return null;
+}
+
 function hoursLine(shop: Shop, dateId: string): string {
   const parts = dateId.split("-").map(Number);
   if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return "";
@@ -143,11 +159,13 @@ function matchChoice(
   // Whole-word / substantive fuzzy match only for longer text
   if (t.length >= 3) {
     for (const c of choices) {
+      const id = normalize(c.id);
       const title = normalize(c.title);
-      if (title === t || title.startsWith(t) || t.startsWith(normalize(c.id))) return c.id;
-      // match option words without matching digits inside prices
+      if (title === t) return c.id;
+      if (id.length <= 3) continue;
+      if (title.startsWith(t) || t.startsWith(id)) return c.id;
       const titleWords = title.replace(/\$[\d.]+/g, "").replace(/\(\d+m\)/g, "");
-      if (titleWords.includes(t) || t.includes(normalize(c.id))) return c.id;
+      if (titleWords.includes(t) || t.includes(id)) return c.id;
     }
   }
   return null;
@@ -726,6 +744,58 @@ export async function handleTurn(params: {
       { id: "yes", title: "Confirm" },
       { id: "no", title: "Cancel" },
     ];
+    const clock = parseClockHint(text);
+    if (clock && session.draft.date && session.draft.serviceId) {
+      releaseSessionLocks(session.id);
+      const live = getAvailableSlots(
+        shop,
+        session.draft.date,
+        session.draft.serviceId,
+        session.draft.barberId || null
+      );
+      const hit = live.find((s) => {
+        const d = new Date(s.start);
+        return d.getHours() === clock.hours && d.getMinutes() === clock.minutes;
+      });
+      if (!hit) {
+        const reply = slotTakenRefresh(shop, session, session.draft.date, params.channel);
+        const want = `${String(clock.hours).padStart(2, "0")}:${String(clock.minutes).padStart(2, "0")}`;
+        reply.text = `${want} is not free. Pick another time.\n\n${reply.text.replace(/^That time was just booked\. Pick another\.\n\n/, "")}`;
+        session.lastPrompt = reply.text;
+        saveSession(session);
+        return { reply, session, shop };
+      }
+      try {
+        const lockId = lockSlot({
+          shopId: shop.id,
+          sessionId: session.id,
+          startsAt: hit.start,
+          endsAt: hit.end,
+          barberId: hit.barberId,
+        });
+        session.draft.lockId = lockId;
+        if (hit.barberId) session.draft.barberId = hit.barberId;
+        const startDate = new Date(hit.start);
+        session.draft.time = `${String(startDate.getHours()).padStart(2, "0")}:${String(startDate.getMinutes()).padStart(2, "0")}`;
+        session.draft.answers.__start = hit.start;
+        session.draft.answers.__end = hit.end;
+        const reply: OrchestratorReply = {
+          text: summaryText(shop, session),
+          step: "await_confirm",
+          choices: yesNo,
+          choiceMode: params.channel === "voice" ? "dtmf" : "buttons",
+        };
+        session.step = "await_confirm";
+        session.lastPrompt = reply.text;
+        saveSession(session);
+        return { reply, session, shop };
+      } catch {
+        const reply = slotTakenRefresh(shop, session, session.draft.date, params.channel);
+        session.lastPrompt = reply.text;
+        saveSession(session);
+        return { reply, session, shop };
+      }
+    }
     const decision = await resolveChoice(text, "Confirm booking?", yesNo, params.dtmf);
     if (decision === "no") {
       releaseSessionLocks(session.id);
