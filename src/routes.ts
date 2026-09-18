@@ -134,7 +134,8 @@ apiRouter.get("/webhooks/whatsapp", (req, res) => {
 
 apiRouter.post("/webhooks/whatsapp", async (req, res) => {
   res.sendStatus(200);
-  console.log("[whatsapp] webhook POST", JSON.stringify(req.body).slice(0, 4000));
+  const raw = req.body == null ? "" : JSON.stringify(req.body);
+  console.log("[whatsapp] webhook POST", raw.slice(0, 4000));
   const messages = extractWhatsAppInbound(req.body);
   console.log("[whatsapp] extracted", messages.length, "message(s)");
   for (const msg of messages) {
