@@ -6,6 +6,8 @@ A **Google Doc** (File → New → Google Docs) is a Word-style page. This app c
 
 Bookings stay on tab `Sheet1` (or `GOOGLE_SHEET_TAB`). Catalog uses extra tabs in the **same** spreadsheet, already shared with the service account.
 
+The **Customer** column is the WhatsApp (or call) From number. The bot does not ask for a phone. Each number may have **at most 4 upcoming confirmed** rows; cancelled and past visits free a slot.
+
 ## Tabs
 
 | Tab | Columns |

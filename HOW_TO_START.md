@@ -161,6 +161,8 @@ Confirm with GET on the same URL. Your app name (e.g. **barber**) must appear in
 
 Temporary tokens expire (~24 hours or less). Paste a new token into `.env` and restart `npm run dev` when sends fail with OAuth `#190`.
 
+The bot uses the **sender WhatsApp number** as the customer id (never asks for it). **Max 4 upcoming confirmed** bookings per number; after one is cancelled or the appointment time has passed, they can book again.
+
 ---
 
 ## 7. Google Sheets + Google Calendar
