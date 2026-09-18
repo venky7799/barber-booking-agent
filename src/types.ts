@@ -122,7 +122,7 @@ export interface OrchestratorReply {
   text: string;
   step: BookingStep;
   choices?: Array<{ id: string; title: string }>;
-  choiceMode?: "buttons" | "list" | "dtmf";
+  choiceMode?: "buttons" | "list" | "dtmf" | "text";
   endSession?: boolean;
   bookingReference?: string;
   gatherSpeech?: boolean;

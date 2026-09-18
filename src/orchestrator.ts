@@ -17,7 +17,7 @@ import {
   releaseSessionLocks,
   upcomingDateChoices,
 } from "./slots.js";
-import { interpretFuzzyChoice } from "./llm.js";
+import { interpretBookingNudge, interpretFuzzyChoice } from "./llm.js";
 import { syncBookingToGoogle } from "./google-sync.js";
 import type {
   Channel,
@@ -85,16 +85,17 @@ function stashAndListSlots(shop: Shop, session: Session, dateId: string, channel
       choiceMode: channel === "voice" ? "dtmf" : "list",
     };
   }
-  const shown = slots.slice(0, 10);
+  const shown = channel === "voice" ? slots.slice(0, 9) : slots;
   session.draft.answers.__slots = shown.map((s) => `${s.start}|${s.end}|${s.barberId || ""}`);
   session.step = "await_time";
   const choices = shown.map((s, i) => ({ id: String(i + 1), title: s.label }));
   const numbered = choices.map((c) => `${c.id}. ${c.title}`).join("\n");
+  const mode = channel === "voice" ? "dtmf" : shown.length <= 10 ? "list" : "text";
   return {
-    text: `${hoursLine(shop, dateId)}Open slots (booked times are hidden):\n${numbered}\n\nReply with a number or tap Choose.`,
+    text: `${hoursLine(shop, dateId)}Open slots (booked times are hidden):\n${numbered}\n\nReply with a number${mode === "list" ? " or tap Choose" : ""}.`,
     step: "await_time",
     choices,
-    choiceMode: channel === "voice" ? "dtmf" : "list",
+    choiceMode: mode,
   };
 }
 
@@ -115,6 +116,124 @@ function slotStillOpen(
   return getAvailableSlots(shop, dateId, serviceId, barberId).some(
     (s) => s.start === start && s.end === end && (s.barberId || "") === (barberId || "")
   );
+}
+
+const confirmButtons = [
+  { id: "yes", title: "Confirm" },
+  { id: "no", title: "Cancel" },
+];
+
+function retargetClock(
+  shop: Shop,
+  session: Session,
+  channel: Channel,
+  hours: number,
+  minutes: number
+): OrchestratorReply {
+  const dateId = session.draft.date;
+  if (!dateId || !session.draft.serviceId) {
+    return {
+      text: "Tap Confirm, Cancel, or say who or when you want.",
+      step: "await_confirm",
+      choices: confirmButtons,
+      choiceMode: channel === "voice" ? "dtmf" : "buttons",
+    };
+  }
+  releaseSessionLocks(session.id);
+  const live = getAvailableSlots(
+    shop,
+    dateId,
+    session.draft.serviceId,
+    session.draft.barberId || null
+  );
+  const hit = live.find((s) => {
+    const d = new Date(s.start);
+    return d.getHours() === hours && d.getMinutes() === minutes;
+  });
+  const want = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  if (!hit) {
+    const reply = slotTakenRefresh(shop, session, dateId, channel);
+    reply.text = `${want} is not free. Pick another time.\n\n${reply.text.replace(/^That time was just booked\. Pick another\.\n\n/, "")}`;
+    return reply;
+  }
+  try {
+    const lockId = lockSlot({
+      shopId: shop.id,
+      sessionId: session.id,
+      startsAt: hit.start,
+      endsAt: hit.end,
+      barberId: hit.barberId,
+    });
+    session.draft.lockId = lockId;
+    if (hit.barberId) session.draft.barberId = hit.barberId;
+    const startDate = new Date(hit.start);
+    session.draft.time = `${String(startDate.getHours()).padStart(2, "0")}:${String(startDate.getMinutes()).padStart(2, "0")}`;
+    session.draft.answers.__start = hit.start;
+    session.draft.answers.__end = hit.end;
+    session.step = "await_confirm";
+    return {
+      text: summaryText(shop, session),
+      step: "await_confirm",
+      choices: confirmButtons,
+      choiceMode: channel === "voice" ? "dtmf" : "buttons",
+    };
+  } catch {
+    return slotTakenRefresh(shop, session, dateId, channel);
+  }
+}
+
+async function applyBookingNudge(
+  shop: Shop,
+  session: Session,
+  channel: Channel,
+  userText: string
+): Promise<OrchestratorReply | "confirm" | "cancel" | null> {
+  const labels =
+    session.draft.date && session.draft.serviceId
+      ? getAvailableSlots(shop, session.draft.date, session.draft.serviceId, null).map((s) => s.label)
+      : [];
+  const nudge = await interpretBookingNudge({
+    userText,
+    barbers: shop.config.barbers,
+    openSlotLabels: labels,
+  });
+  if (nudge.action === "none") return null;
+  if (nudge.action === "confirm") return "confirm";
+  if (nudge.action === "cancel") return "cancel";
+  if (nudge.action === "change_barber" && nudge.barberId) {
+    releaseSessionLocks(session.id);
+    session.draft.barberId = nudge.barberId;
+    const name = shop.config.barbers.find((b) => b.id === nudge.barberId)?.name || "that barber";
+    if (nudge.timeHint) {
+      const [hh, mm] = nudge.timeHint.split(":").map(Number);
+      if (Number.isInteger(hh) && Number.isInteger(mm)) {
+        const clocked = retargetClock(shop, session, channel, hh, mm);
+        if (clocked.step === "await_confirm") {
+          return { ...clocked, text: `Switched to ${name}.\n\n${clocked.text}` };
+        }
+        return clocked;
+      }
+    }
+    if (session.draft.date && session.draft.serviceId) {
+      const inner = stashAndListSlots(shop, session, session.draft.date, channel);
+      if (inner.step !== "await_time") return inner;
+      return { ...inner, text: `Switching to ${name}. Pick a time.\n\n${inner.text}` };
+    }
+    session.step = "await_date";
+    return {
+      text: `Switching to ${name}. Which day works?`,
+      step: "await_date",
+      choices: upcomingDateChoices(shop.config),
+      choiceMode: channel === "voice" ? "dtmf" : "list",
+    };
+  }
+  if (nudge.action === "change_time" && nudge.timeHint) {
+    const [hh, mm] = nudge.timeHint.split(":").map(Number);
+    if (Number.isInteger(hh) && Number.isInteger(mm)) {
+      return retargetClock(shop, session, channel, hh, mm);
+    }
+  }
+  return null;
 }
 
 function money(cents: number, currency = "USD"): string {
@@ -605,11 +724,30 @@ export async function handleTurn(params: {
     });
     const picked = await resolveChoice(text, "Pick a time", choices, params.dtmf);
     if (!picked) {
+      const nudged = await applyBookingNudge(shop, session, params.channel, text);
+      if (nudged === "cancel") {
+        releaseSessionLocks(session.id);
+        resetSession(session, shop.id);
+        const reply: OrchestratorReply = {
+          text: "Booking cancelled. Reply BOOK to start again.",
+          step: "await_intent",
+          choices: intentChoices(),
+          choiceMode: params.channel === "voice" ? "dtmf" : "buttons",
+        };
+        session.lastPrompt = reply.text;
+        saveSession(session);
+        return { reply, session, shop };
+      }
+      if (nudged && nudged !== "confirm") {
+        session.lastPrompt = nudged.text;
+        saveSession(session);
+        return { reply: nudged, session, shop };
+      }
       const reply: OrchestratorReply = {
-        text: "Please pick a time from the list.",
+        text: "Please pick a time from the list, or say who you want (for example a barber by name).",
         step: "await_time",
         choices,
-        choiceMode: params.channel === "voice" ? "dtmf" : "list",
+        choiceMode: params.channel === "voice" ? "dtmf" : choices.length > 10 ? "text" : "list",
       };
       session.lastPrompt = reply.text;
       saveSession(session);
@@ -746,57 +884,12 @@ export async function handleTurn(params: {
     ];
     const clock = parseClockHint(text);
     if (clock && session.draft.date && session.draft.serviceId) {
-      releaseSessionLocks(session.id);
-      const live = getAvailableSlots(
-        shop,
-        session.draft.date,
-        session.draft.serviceId,
-        session.draft.barberId || null
-      );
-      const hit = live.find((s) => {
-        const d = new Date(s.start);
-        return d.getHours() === clock.hours && d.getMinutes() === clock.minutes;
-      });
-      if (!hit) {
-        const reply = slotTakenRefresh(shop, session, session.draft.date, params.channel);
-        const want = `${String(clock.hours).padStart(2, "0")}:${String(clock.minutes).padStart(2, "0")}`;
-        reply.text = `${want} is not free. Pick another time.\n\n${reply.text.replace(/^That time was just booked\. Pick another\.\n\n/, "")}`;
-        session.lastPrompt = reply.text;
-        saveSession(session);
-        return { reply, session, shop };
-      }
-      try {
-        const lockId = lockSlot({
-          shopId: shop.id,
-          sessionId: session.id,
-          startsAt: hit.start,
-          endsAt: hit.end,
-          barberId: hit.barberId,
-        });
-        session.draft.lockId = lockId;
-        if (hit.barberId) session.draft.barberId = hit.barberId;
-        const startDate = new Date(hit.start);
-        session.draft.time = `${String(startDate.getHours()).padStart(2, "0")}:${String(startDate.getMinutes()).padStart(2, "0")}`;
-        session.draft.answers.__start = hit.start;
-        session.draft.answers.__end = hit.end;
-        const reply: OrchestratorReply = {
-          text: summaryText(shop, session),
-          step: "await_confirm",
-          choices: yesNo,
-          choiceMode: params.channel === "voice" ? "dtmf" : "buttons",
-        };
-        session.step = "await_confirm";
-        session.lastPrompt = reply.text;
-        saveSession(session);
-        return { reply, session, shop };
-      } catch {
-        const reply = slotTakenRefresh(shop, session, session.draft.date, params.channel);
-        session.lastPrompt = reply.text;
-        saveSession(session);
-        return { reply, session, shop };
-      }
+      const reply = retargetClock(shop, session, params.channel, clock.hours, clock.minutes);
+      session.lastPrompt = reply.text;
+      saveSession(session);
+      return { reply, session, shop };
     }
-    const decision = await resolveChoice(text, "Confirm booking?", yesNo, params.dtmf);
+    const decision = matchChoice(text, yesNo, params.dtmf) || matchClosedKeywords(text, yesNo);
     if (decision === "no") {
       releaseSessionLocks(session.id);
       resetSession(session, shop.id);
@@ -811,15 +904,36 @@ export async function handleTurn(params: {
       return { reply, session, shop };
     }
     if (decision !== "yes") {
-      const reply: OrchestratorReply = {
-        text: summaryText(shop, session),
-        step: "await_confirm",
-        choices: yesNo,
-        choiceMode: params.channel === "voice" ? "dtmf" : "buttons",
-      };
-      session.lastPrompt = reply.text;
-      saveSession(session);
-      return { reply, session, shop };
+      const nudged = await applyBookingNudge(shop, session, params.channel, text);
+      if (nudged === "confirm") {
+        /* fall through to confirmBooking below */
+      } else if (nudged === "cancel") {
+        releaseSessionLocks(session.id);
+        resetSession(session, shop.id);
+        const reply: OrchestratorReply = {
+          text: "Booking cancelled. Reply BOOK to start again.",
+          step: "await_intent",
+          choices: intentChoices(),
+          choiceMode: params.channel === "voice" ? "dtmf" : "buttons",
+        };
+        session.lastPrompt = reply.text;
+        saveSession(session);
+        return { reply, session, shop };
+      } else if (nudged) {
+        session.lastPrompt = nudged.text;
+        saveSession(session);
+        return { reply: nudged, session, shop };
+      } else {
+        const reply: OrchestratorReply = {
+          text: "Tap Confirm or Cancel, or say who you want or a different time.",
+          step: "await_confirm",
+          choices: yesNo,
+          choiceMode: params.channel === "voice" ? "dtmf" : "buttons",
+        };
+        session.lastPrompt = reply.text;
+        saveSession(session);
+        return { reply, session, shop };
+      }
     }
 
     const start = String(session.draft.answers.__start || "");

@@ -54,6 +54,11 @@ export async function sendWhatsAppReply(to: string, reply: OrchestratorReply): P
       text: { body: numberedChoices(reply) },
     });
 
+  if (reply.choiceMode === "text" || (reply.choices && reply.choices.length > 10 && reply.choiceMode !== "buttons")) {
+    await asText();
+    return;
+  }
+
   if (reply.choices && reply.choices.length > 0 && reply.choices.length <= 3 && reply.choiceMode === "buttons") {
     const ok = await sendPayload({
       messaging_product: "whatsapp",
