@@ -28,9 +28,9 @@ app.get("/", (_req, res) => {
   <ul>
     <li><a href="/health">/health</a></li>
     <li><a href="/shops">/shops</a> — demo tenants with personalized questions</li>
-    <li>POST <code>/simulate</code> — local booking turns without Meta/Twilio</li>
+    <li><a href="/simulate">/simulate</a> — local booking turns (GET in the browser, or POST JSON)</li>
     <li>WhatsApp webhook <code>/webhooks/whatsapp</code></li>
-    <li>Twilio Voice webhook <code>/webhooks/voice</code></li>
+    <li><a href="/webhooks/voice">/webhooks/voice</a> — Twilio Voice (GET or POST TwiML)</li>
   </ul>
 </body></html>`);
 });

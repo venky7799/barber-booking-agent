@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import {
   createShop,
@@ -78,22 +78,47 @@ apiRouter.get("/shops/:id/slots", (req, res) => {
   });
 });
 
-/** Simulate a booking turn without WhatsApp/Twilio (great for local testing). */
-apiRouter.post("/simulate", async (req, res) => {
-  const schema = z.object({
-    channel: z.enum(["whatsapp", "voice", "api"]).default("api"),
-    externalId: z.string().min(3),
-    text: z.string().default(""),
-    dtmf: z.string().optional(),
-    toNumber: z.string().optional(),
-  });
+const simulateSchema = z.object({
+  channel: z.enum(["whatsapp", "voice", "api"]).default("api"),
+  externalId: z.string().min(3),
+  text: z.string().default(""),
+  dtmf: z.string().optional(),
+  toNumber: z.string().optional(),
+});
+
+async function runSimulate(req: Request, res: Response) {
+  const raw = {
+    ...(req.query && typeof req.query === "object" ? req.query : {}),
+    ...(req.body && typeof req.body === "object" ? req.body : {}),
+  };
   try {
-    const body = schema.parse(req.body);
+    const body = simulateSchema.parse(raw);
     const result = await handleTurn(body);
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Bad request" });
   }
+}
+
+/** Browser GET or POST JSON — booking turns without WhatsApp/Twilio. */
+apiRouter.get("/simulate", async (req, res) => {
+  const q = req.query as Record<string, string | undefined>;
+  if (!q.externalId && !q.text) {
+    return res.json({
+      ok: true,
+      method: "GET or POST",
+      usage: {
+        POST: { externalId: "user-1", text: "FADE01", channel: "api" },
+        GET: "/simulate?externalId=user-1&text=FADE01",
+      },
+      next: "Open /simulate?externalId=user-1&text=FADE01 then send book, 1, 1, … in later requests with the same externalId.",
+    });
+  }
+  return runSimulate(req, res);
+});
+
+apiRouter.post("/simulate", async (req, res) => {
+  await runSimulate(req, res);
 });
 
 // --- WhatsApp webhooks ---
@@ -125,15 +150,25 @@ apiRouter.post("/webhooks/whatsapp", async (req, res) => {
   }
 });
 
-// --- Twilio Voice ---
-apiRouter.post("/webhooks/voice", async (req, res) => {
-  const from = String(req.body.From || "unknown");
-  const to = String(req.body.To || "");
-  const digits = req.body.Digits ? String(req.body.Digits) : undefined;
-  const speech = req.body.SpeechResult ? String(req.body.SpeechResult) : "";
+// --- Twilio Voice (POST is the default; GET works in the browser and if the number is set to GET) ---
+async function handleVoiceWebhook(req: Request, res: Response) {
+  const src = {
+    ...(typeof req.query === "object" && req.query ? req.query : {}),
+    ...(typeof req.body === "object" && req.body ? req.body : {}),
+  } as Record<string, unknown>;
+  const pick = (...keys: string[]) => {
+    for (const k of keys) {
+      const v = src[k];
+      if (v != null && String(v).length) return String(v);
+    }
+    return "";
+  };
+  const from = pick("From", "from") || "unknown";
+  const to = pick("To", "to");
+  const digits = pick("Digits", "digits") || undefined;
+  const speech = pick("SpeechResult", "speechResult");
   const text = speech || digits || "";
 
-  // First ring with empty body → greeting
   const { reply } = await handleTurn({
     channel: "voice",
     externalId: from,
@@ -144,4 +179,7 @@ apiRouter.post("/webhooks/voice", async (req, res) => {
 
   const twiml = buildVoiceTwimlSafe(reply, "/webhooks/voice");
   res.type("text/xml").send(twiml);
-});
+}
+
+apiRouter.get("/webhooks/voice", handleVoiceWebhook);
+apiRouter.post("/webhooks/voice", handleVoiceWebhook);
