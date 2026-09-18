@@ -4,6 +4,7 @@ import { migrate } from "./db.js";
 import { seedDemoShops } from "./seed.js";
 import { apiRouter } from "./routes.js";
 import { bindFadeRoomWhatsApp } from "./whatsapp-bind.js";
+import { startCatalogPoll, syncShopCatalogFromGoogle } from "./google-catalog.js";
 
 loadEnv();
 migrate();
@@ -46,5 +47,9 @@ const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "0.0.0.0";
 app.listen(port, host, () => {
   console.log(`Barber booking agent listening on http://${host}:${port}`);
-  void bindFadeRoomWhatsApp().catch((err) => console.error("[whatsapp] bind failed", err));
+  void syncShopCatalogFromGoogle()
+    .catch((err) => console.error("[google] catalog failed", err instanceof Error ? err.message : err))
+    .then(() => bindFadeRoomWhatsApp())
+    .catch((err) => console.error("[whatsapp] bind failed", err));
+  startCatalogPoll();
 });

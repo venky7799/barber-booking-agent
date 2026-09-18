@@ -44,6 +44,10 @@ export function parseCalendarId(raw: string): string {
   return t;
 }
 
+export function googleAuth() {
+  return auth();
+}
+
 function credentials() {
   const path = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (path?.trim()) return undefined;

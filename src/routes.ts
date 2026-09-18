@@ -10,6 +10,7 @@ import {
 import { shopConfigSchema, upsertShopSchema } from "./schemas.js";
 import { listBookings, getAvailableSlots, upcomingDateChoices } from "./slots.js";
 import { handleTurn } from "./orchestrator.js";
+import { syncShopCatalogFromGoogle } from "./google-catalog.js";
 import { extractWhatsAppInbound, sendWhatsAppReply } from "./channels/whatsapp.js";
 import { buildVoiceTwimlSafe } from "./channels/voice.js";
 
@@ -17,6 +18,15 @@ export const apiRouter = Router();
 
 apiRouter.get("/health", (_req, res) => {
   res.json({ ok: true, service: "barber-booking-agent" });
+});
+
+apiRouter.post("/catalog/sync", async (_req, res) => {
+  try {
+    const ok = await syncShopCatalogFromGoogle();
+    res.json({ ok, shops: listShops().map((s) => ({ id: s.id, name: s.name, code: s.code })) });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "sync failed" });
+  }
 });
 
 apiRouter.get("/shops", (_req, res) => {

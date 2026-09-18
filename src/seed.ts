@@ -57,6 +57,7 @@ const clipJointConfig: ShopConfig = {
   greeting: "Clip Joint here — walk-ins welcome, bookings preferred.",
   confirmation: "Clip Joint booking confirmed. Bring a photo of the style if you have one.",
   timezone: "America/Chicago",
+  currency: "USD",
   bufferMinutes: 0,
   sameDayCutoffMinutes: 45,
   hours: {

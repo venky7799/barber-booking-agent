@@ -45,7 +45,7 @@ export interface ShopConfig {
   questions: ShopQuestion[];
   timezone: string;
   /** ISO 4217. priceCents is paise for INR, cents for USD. */
-  currency?: string;
+  currency: string;
 }
 
 export interface Shop {
