@@ -25,6 +25,7 @@ import type {
   Session,
   Shop,
   ShopQuestion,
+  Weekday,
 } from "./types.js";
 
 function isGreeting(text: string): boolean {
@@ -37,6 +38,19 @@ function wantsAvailability(text: string): boolean {
   return /\b(list\s+of\s+)?slots?\b|\btimings?\b|\bavailable(\s+(times?|slots?))?\b|\bopenings?\b|\bwhat times?\b/i.test(
     text
   );
+}
+
+function hoursLine(shop: Shop, dateId: string): string {
+  const parts = dateId.split("-").map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return "";
+  const [y, m, d] = parts;
+  const dt = new Date(y, m - 1, d);
+  const keys: Weekday[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const key = keys[dt.getDay()];
+  const hours = shop.config.hours[key];
+  if (!hours) return "";
+  return `Shop hours ${names[dt.getDay()]} ${hours.open}–${hours.close} (from the shop sheet).\n`;
 }
 
 function stashAndListSlots(shop: Shop, session: Session, dateId: string, channel: Channel): OrchestratorReply {
@@ -61,11 +75,30 @@ function stashAndListSlots(shop: Shop, session: Session, dateId: string, channel
   const choices = shown.map((s, i) => ({ id: String(i + 1), title: s.label }));
   const numbered = choices.map((c) => `${c.id}. ${c.title}`).join("\n");
   return {
-    text: `Open slots:\n${numbered}\n\nReply with a number or tap Choose.`,
+    text: `${hoursLine(shop, dateId)}Open slots (booked times are hidden):\n${numbered}\n\nReply with a number or tap Choose.`,
     step: "await_time",
     choices,
     choiceMode: channel === "voice" ? "dtmf" : "list",
   };
+}
+
+function slotTakenRefresh(shop: Shop, session: Session, dateId: string, channel: Channel): OrchestratorReply {
+  const inner = stashAndListSlots(shop, session, dateId, channel);
+  if (inner.step !== "await_time") return inner;
+  return { ...inner, text: `That time was just booked. Pick another.\n\n${inner.text}` };
+}
+
+function slotStillOpen(
+  shop: Shop,
+  dateId: string,
+  start: string,
+  end: string,
+  barberId: string | null,
+  serviceId: string
+): boolean {
+  return getAvailableSlots(shop, dateId, serviceId, barberId).some(
+    (s) => s.start === start && s.end === end && (s.barberId || "") === (barberId || "")
+  );
 }
 
 function money(cents: number, currency = "USD"): string {
@@ -566,6 +599,16 @@ export async function handleTurn(params: {
     }
     const line = slotLines[Number(picked) - 1];
     const [start, end, barberId] = line.split("|");
+    const dateId = session.draft.date || formatDate(new Date(start));
+    if (
+      !session.draft.serviceId ||
+      !slotStillOpen(shop, dateId, start, end, barberId || null, session.draft.serviceId)
+    ) {
+      const reply = slotTakenRefresh(shop, session, dateId, params.channel);
+      session.lastPrompt = reply.text;
+      saveSession(session);
+      return { reply, session, shop };
+    }
     try {
       const lockId = lockSlot({
         shopId: shop.id,
@@ -586,14 +629,7 @@ export async function handleTurn(params: {
       session.draft.answers.__start = start;
       session.draft.answers.__end = end;
     } catch {
-      session.step = "await_date";
-      const dates = upcomingDateChoices(shop.config);
-      const reply: OrchestratorReply = {
-        text: "That slot was just taken. Pick another day.",
-        step: "await_date",
-        choices: dates,
-        choiceMode: params.channel === "voice" ? "dtmf" : "list",
-      };
+      const reply = slotTakenRefresh(shop, session, dateId, params.channel);
       session.lastPrompt = reply.text;
       saveSession(session);
       return { reply, session, shop };
@@ -774,6 +810,13 @@ export async function handleTurn(params: {
       if (err instanceof Error && err.message === "Booking cap") {
         resetSession(session, shop.id);
         const reply = bookingCapReply(params.channel, params.externalId);
+        session.lastPrompt = reply.text;
+        saveSession(session);
+        return { reply, session, shop };
+      }
+      const dateId = session.draft.date;
+      if (dateId && session.draft.serviceId) {
+        const reply = slotTakenRefresh(shop, session, dateId, params.channel);
         session.lastPrompt = reply.text;
         saveSession(session);
         return { reply, session, shop };
