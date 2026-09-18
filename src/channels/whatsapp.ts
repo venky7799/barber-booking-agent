@@ -30,6 +30,7 @@ async function sendPayload(payload: Record<string, unknown>): Promise<boolean> {
 
 function numberedChoices(reply: OrchestratorReply): string {
   if (!reply.choices?.length) return reply.text.slice(0, 4096);
+  if (/\n1\.\s/.test(reply.text)) return reply.text.slice(0, 4096);
   const lines = reply.choices.map((c, i) => `${i + 1}. ${c.title}`).join("\n");
   return `${reply.text}\n\n${lines}`.slice(0, 4096);
 }
@@ -54,7 +55,7 @@ export async function sendWhatsAppReply(to: string, reply: OrchestratorReply): P
       text: { body: numberedChoices(reply) },
     });
 
-  if (reply.choiceMode === "text" || (reply.choices && reply.choices.length > 10 && reply.choiceMode !== "buttons")) {
+  if (reply.choiceMode === "text") {
     await asText();
     return;
   }
@@ -88,7 +89,7 @@ export async function sendWhatsAppReply(to: string, reply: OrchestratorReply): P
       type: "interactive",
       interactive: {
         type: "list",
-        body: { text: numberedChoices(reply).slice(0, 1024) },
+        body: { text: reply.text.slice(0, 1024) },
         action: {
           button: "Choose",
           sections: [{ title: "Options", rows }],

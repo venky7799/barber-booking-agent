@@ -64,7 +64,7 @@ Existing shops do not pick up `src/seed.ts` changes. Update live config with `PU
 - Customer identity is the **WhatsApp or call From number**. The bot never asks for a phone.
 - That number is stored on the booking and in the Google Sheet **Customer** column.
 - **At most 4 upcoming confirmed** bookings per number (across shops). Cancelled and completed visits do not count, so they can book again until they are back at 4.
-- WhatsApp time lists follow the Google **Hours** tab and hide booked slots. If more than 10 openings, the full numbered list is sent as text. If a time is taken mid-flow, the customer is asked to pick another remaining slot that day.
+- WhatsApp time lists follow the Google **Hours** tab and hide booked slots. Later times are behind **More times** (WhatsApp caps lists at 10 rows); a typed number still works. If a time is taken mid-flow, the customer is asked to pick another remaining slot that day.
 - With `LLM_API_KEY`, free text on confirm/time (e.g. asking for a different barber from the sheet) is interpreted by LangChain.
 
 ```http

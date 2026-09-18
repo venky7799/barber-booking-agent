@@ -163,7 +163,7 @@ Temporary tokens expire (~24 hours or less). Paste a new token into `.env` and r
 
 The bot uses the **sender WhatsApp number** as the customer id (never asks for it). **Max 4 upcoming confirmed** bookings per number; after one is cancelled or the appointment time has passed, they can book again.
 
-Shop **Hours** in the Google Sheet drive the WhatsApp time list (booked slots are hidden). More than 10 free times are sent as a numbered list in chat (reply with the number). If a time is taken while they are choosing, they get a fresh list. Set `LLM_API_KEY` so free text such as changing barber is handled by LangChain (barber names come from the sheet, not from code).
+Shop **Hours** in the Google Sheet drive the WhatsApp time list (booked slots are hidden). WhatsApp can only show 10 tappable rows, so later times use **More times**; you can also reply with a number. If a time is taken while they are choosing, they get a fresh list. Set `LLM_API_KEY` so free text such as changing barber is handled by LangChain (barber names come from the sheet, not from code).
 
 On confirm, **Confirm** / **Cancel** still work; other sentences are interpreted by LangChain.
 
