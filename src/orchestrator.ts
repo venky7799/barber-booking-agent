@@ -65,8 +65,17 @@ function stashAndListSlots(shop: Shop, session: Session, dateId: string, channel
   };
 }
 
-function money(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
+function money(cents: number, currency = "USD"): string {
+  const code = currency.toUpperCase();
+  try {
+    return new Intl.NumberFormat(code === "INR" ? "en-IN" : "en-US", {
+      style: "currency",
+      currency: code,
+      maximumFractionDigits: code === "INR" ? 0 : 2,
+    }).format(cents / 100);
+  } catch {
+    return `${code} ${(cents / 100).toFixed(2)}`;
+  }
 }
 
 function normalize(text: string): string {
@@ -169,7 +178,7 @@ function intentChoices(): Array<{ id: string; title: string }> {
 function serviceChoices(shop: Shop) {
   return shop.config.services.map((s) => ({
     id: s.id,
-    title: `${s.name} (${s.durationMinutes}m · ${money(s.priceCents)})`,
+    title: `${s.name} (${s.durationMinutes}m · ${money(s.priceCents, shop.config.currency || "USD")})`,
   }));
 }
 
@@ -209,7 +218,7 @@ function summaryText(shop: Shop, session: Session): string {
     .join("; ");
   return [
     `Please confirm your booking at ${shop.name}:`,
-    `Service: ${service?.name}`,
+    `Service: ${service?.name}${service ? ` (${money(service.priceCents, shop.config.currency || "USD")})` : ""}`,
     `Barber: ${barber}`,
     `When: ${session.draft.date} at ${session.draft.time}`,
     answers ? `Notes: ${answers}` : null,

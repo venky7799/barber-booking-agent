@@ -45,6 +45,8 @@ export const shopConfigSchema = z.object({
   sameDayCutoffMinutes: z.number().int().nonnegative().default(60),
   questions: z.array(questionSchema).default([]),
   timezone: z.string().default("UTC"),
+  /** ISO 4217. `priceCents` is the minor unit (paise for INR, cents for USD). */
+  currency: z.string().length(3).default("USD"),
 });
 
 export const upsertShopSchema = z.object({

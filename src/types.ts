@@ -44,6 +44,8 @@ export interface ShopConfig {
   sameDayCutoffMinutes: number;
   questions: ShopQuestion[];
   timezone: string;
+  /** ISO 4217. priceCents is paise for INR, cents for USD. */
+  currency?: string;
 }
 
 export interface Shop {

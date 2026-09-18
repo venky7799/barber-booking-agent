@@ -53,7 +53,11 @@ PUT /shops/:id/config
 Content-Type: application/json
 ```
 
-Config includes `services`, `barbers`, `hours`, `questions` (`single_choice` | `multi_choice` | `yes_no` | `short_text`), greetings, buffers, and cutoff.
+Config includes `services`, `barbers`, `hours`, `questions`, greetings, `timezone`, `currency` (`USD` / `INR`), buffers, and cutoff.
+
+`priceCents` is the minor unit: **cents** for USD, **paise** for INR (₹350 → `35000`).
+
+Existing shops do not pick up `src/seed.ts` changes. Update live config with `PUT /shops/:id/config` (see `GET /shops` for the id).
 
 ```http
 POST /shops

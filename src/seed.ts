@@ -12,20 +12,29 @@ const weekdayHours = {
 };
 
 const fadeRoomConfig: ShopConfig = {
-  greeting: "Welcome to Fade Room — sharp cuts, fair prices.",
+  greeting: "Welcome to Fade Room — cuts, fades, and beards. Prices in ₹.",
   confirmation: "You're booked at Fade Room. See you soon!",
-  timezone: "America/New_York",
+  timezone: "Asia/Kolkata",
+  currency: "INR",
   bufferMinutes: 5,
   sameDayCutoffMinutes: 30,
-  hours: weekdayHours,
+  hours: {
+    mon: { open: "10:00", close: "20:00" },
+    tue: { open: "10:00", close: "20:00" },
+    wed: { open: "10:00", close: "20:00" },
+    thu: { open: "10:00", close: "20:00" },
+    fri: { open: "10:00", close: "21:00" },
+    sat: { open: "10:00", close: "21:00" },
+    sun: { open: "11:00", close: "18:00" },
+  },
   services: [
-    { id: "haircut", name: "Haircut", durationMinutes: 30, priceCents: 2500 },
-    { id: "fade", name: "Skin Fade", durationMinutes: 45, priceCents: 3500 },
-    { id: "beard", name: "Beard Trim", durationMinutes: 20, priceCents: 1500 },
+    { id: "haircut", name: "Haircut", durationMinutes: 30, priceCents: 35000 },
+    { id: "fade", name: "Skin Fade", durationMinutes: 45, priceCents: 50000 },
+    { id: "beard", name: "Beard Trim", durationMinutes: 20, priceCents: 20000 },
   ],
   barbers: [
-    { id: "jay", name: "Jay" },
-    { id: "omar", name: "Omar" },
+    { id: "rahul", name: "Rahul" },
+    { id: "arjun", name: "Arjun" },
   ],
   questions: [
     {
