@@ -80,6 +80,72 @@ const nudgeSchema = z.object({
     .describe("24-hour HH:MM if they asked for a clock time, else null"),
 });
 
+export type BookingExtract = {
+  intent: "book" | "cancel" | "reschedule" | "none";
+  serviceId: string | null;
+  barberId: string | null;
+  dateId: string | null;
+  timeHint: string | null;
+};
+
+const extractSchema = z.object({
+  intent: z
+    .enum(["book", "cancel", "reschedule", "none"])
+    .describe("book if they want an appointment, even in a long sentence."),
+  serviceId: z.string().nullable().describe("Exact service id from the list, else null."),
+  barberId: z.string().nullable().describe("Exact barber id they WANT from the list, else null."),
+  dateId: z.string().nullable().describe("Exact YYYY-MM-DD from the valid dates list, else null."),
+  timeHint: z.string().nullable().describe("24-hour HH:MM if they named a clock time, else null."),
+});
+
+export async function interpretBookingExtract(params: {
+  userText: string;
+  today: string;
+  services: Array<{ id: string; name: string }>;
+  barbers: Array<{ id: string; name: string }>;
+  validDates: Array<{ id: string; title: string }>;
+}): Promise<BookingExtract> {
+  const none: BookingExtract = {
+    intent: "none",
+    serviceId: null,
+    barberId: null,
+    dateId: null,
+    timeHint: null,
+  };
+  const llm = model();
+  if (!llm) return none;
+  const allowedServices = new Set(params.services.map((s) => s.id));
+  const allowedBarbers = new Set(params.barbers.map((b) => b.id));
+  const allowedDates = new Set(params.validDates.map((d) => d.id));
+  const serviceLine = params.services.map((s) => `${s.id}:${s.name}`).join(" | ") || "(none)";
+  const barberLine = params.barbers.map((b) => `${b.id}:${b.name}`).join(" | ") || "(none)";
+  const dateLine = params.validDates.map((d) => `${d.id}:${d.title}`).join(" | ") || "(none)";
+  try {
+    const structured = llm.withStructuredOutput(extractSchema);
+    const out = await structured.invoke([
+      {
+        role: "system",
+        content:
+          "Extract a booking request. Use only ids from the lists. Never invent barbers, services, or dates. Map relative days (today, tomorrow) onto valid date ids. If they name a stylist they want, set that barberId. If they want an appointment, intent is book.",
+      },
+      {
+        role: "user",
+        content: `Today: ${params.today}\nServices: ${serviceLine}\nBarbers: ${barberLine}\nDates: ${dateLine}\nUser: ${params.userText}`,
+      },
+    ]);
+    const serviceId = out.serviceId?.trim() && allowedServices.has(out.serviceId.trim()) ? out.serviceId.trim() : null;
+    const barberId = out.barberId?.trim() && allowedBarbers.has(out.barberId.trim()) ? out.barberId.trim() : null;
+    const dateId = out.dateId?.trim() && allowedDates.has(out.dateId.trim()) ? out.dateId.trim() : null;
+    let timeHint = out.timeHint?.trim() || null;
+    if (timeHint && !/^\d{2}:\d{2}$/.test(timeHint)) timeHint = null;
+    const intent = out.intent;
+    return { intent, serviceId, barberId, dateId, timeHint };
+  } catch (err) {
+    console.warn("[llm] extract skipped", err instanceof Error ? err.message : err);
+    return none;
+  }
+}
+
 export async function interpretBookingNudge(params: {
   userText: string;
   barbers: Array<{ id: string; name: string }>;
