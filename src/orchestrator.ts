@@ -17,7 +17,7 @@ import {
   releaseSessionLocks,
   upcomingDateChoices,
 } from "./slots.js";
-import { interpretBookingNudge, interpretFuzzyChoice } from "./llm.js";
+import { interpretBookingExtract, interpretBookingNudge, interpretFuzzyChoice } from "./llm.js";
 import { syncBookingToGoogle } from "./google-sync.js";
 import type {
   Channel,
@@ -375,6 +375,117 @@ async function resolveChoice(
   return interpretFuzzyChoice({ userText: text, prompt, choices });
 }
 
+function matchNameFromList(
+  items: Array<{ id: string; name: string }>,
+  text: string
+): string | null {
+  const t = normalize(text);
+  for (const item of items) {
+    const name = normalize(item.name);
+    if (name.length < 3) continue;
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`\\b${escaped}\\b`, "i").test(t)) return item.id;
+  }
+  return null;
+}
+
+function applyScheduleFallbacks(shop: Shop, session: Session, userText: string): void {
+  const dates = upcomingDateChoices(shop.config);
+  const dateIds = new Set(dates.map((d) => d.id));
+  if (!session.draft.barberId) {
+    const id = matchNameFromList(shop.config.barbers, userText);
+    if (id) session.draft.barberId = id;
+  }
+  if (!session.draft.serviceId) {
+    const id = matchNameFromList(
+      shop.config.services.map((s) => ({ id: s.id, name: s.name })),
+      userText
+    );
+    if (id) session.draft.serviceId = id;
+  }
+  if (!session.draft.answers.__timeHint) {
+    const clock = parseClockHint(userText);
+    if (clock) {
+      session.draft.answers.__timeHint = `${String(clock.hours).padStart(2, "0")}:${String(clock.minutes).padStart(2, "0")}`;
+    }
+  }
+  if (!session.draft.date) {
+    const tl = normalize(userText);
+    const today = formatDate(new Date());
+    const tomorrowDate = new Date();
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrow = formatDate(tomorrowDate);
+    if (/\btomorrow\b/.test(tl) && dateIds.has(tomorrow)) session.draft.date = tomorrow;
+    else if (/\btoday\b/.test(tl) && dateIds.has(today)) session.draft.date = today;
+  }
+}
+
+function applyBookingExtract(
+  shop: Shop,
+  session: Session,
+  extract: Awaited<ReturnType<typeof interpretBookingExtract>>,
+  userText: string
+): void {
+  if (extract.serviceId) session.draft.serviceId = extract.serviceId;
+  if (extract.barberId) session.draft.barberId = extract.barberId;
+  if (extract.dateId) session.draft.date = extract.dateId;
+  if (extract.timeHint) session.draft.answers.__timeHint = extract.timeHint;
+  applyScheduleFallbacks(shop, session, userText);
+}
+
+function notedPrefix(shop: Shop, session: Session): string {
+  const bits: string[] = [];
+  if (session.draft.barberId && session.draft.barberId !== "any") {
+    const name = shop.config.barbers.find((b) => b.id === session.draft.barberId)?.name;
+    if (name) bits.push(name);
+  }
+  if (session.draft.date) bits.push(session.draft.date);
+  const hint = session.draft.answers.__timeHint;
+  if (typeof hint === "string" && hint) bits.push(hint);
+  if (!bits.length) return "";
+  return `Noted ${bits.join(" · ")}. `;
+}
+
+function proceedBooking(shop: Shop, session: Session, channel: Channel): OrchestratorReply {
+  if (!session.draft.serviceId) {
+    session.step = "await_service";
+    return {
+      text: `${notedPrefix(shop, session)}Which service would you like?`,
+      step: "await_service",
+      choices: serviceChoices(shop),
+      choiceMode: channel === "voice" ? "dtmf" : "list",
+    };
+  }
+  if (shop.config.barbers.length > 0 && !session.draft.barberId) {
+    session.step = "await_barber";
+    return {
+      text: `${notedPrefix(shop, session)}Any preferred barber?`,
+      step: "await_barber",
+      choices: barberChoices(shop),
+      choiceMode: channel === "voice" ? "dtmf" : "list",
+    };
+  }
+  if (!session.draft.date) {
+    session.step = "await_date";
+    return {
+      text: `${notedPrefix(shop, session)}Which day works for you?`,
+      step: "await_date",
+      choices: upcomingDateChoices(shop.config),
+      choiceMode: channel === "voice" ? "dtmf" : "list",
+    };
+  }
+  const listed = stashAndListSlots(shop, session, session.draft.date, channel);
+  const hint = session.draft.answers.__timeHint;
+  delete session.draft.answers.__timeHint;
+  if (typeof hint === "string" && /^\d{2}:\d{2}$/.test(hint) && listed.step === "await_time") {
+    const [hh, mm] = hint.split(":").map(Number);
+    if (Number.isInteger(hh) && Number.isInteger(mm)) {
+      return retargetClock(shop, session, channel, hh, mm);
+    }
+  }
+  return listed;
+}
+
 function bookingCapReply(channel: Channel, customerExternalId: string): OrchestratorReply {
   const n = countActiveBookings(customerExternalId);
   return {
@@ -578,7 +689,28 @@ export async function handleTurn(params: {
 
   // Intent
   if (session.step === "await_intent") {
-    const intent = await resolveChoice(text, "Choose an action", intentChoices(), params.dtmf);
+    const intentExact = matchChoice(text, intentChoices(), params.dtmf) || matchClosedKeywords(text, intentChoices());
+    const dates = upcomingDateChoices(shop.config);
+    const extract =
+      intentExact && normalize(text).length <= 12
+        ? {
+            intent: "none" as const,
+            serviceId: null,
+            barberId: null,
+            dateId: null,
+            timeHint: null,
+          }
+        : await interpretBookingExtract({
+            userText: text,
+            today: formatDate(new Date()),
+            services: shop.config.services.map((s) => ({ id: s.id, name: s.name })),
+            barbers: shop.config.barbers,
+            validDates: dates,
+          });
+    const intent =
+      intentExact ||
+      (extract.intent !== "none" ? extract.intent : null) ||
+      (extract.barberId || extract.dateId || extract.timeHint ? "book" : null);
     if (intent === "cancel") {
       session.step = "await_confirm";
       session.draft = { ...emptyDraft(), answers: { _action: "cancel" } };
@@ -619,14 +751,8 @@ export async function handleTurn(params: {
       return { reply, session, shop };
     }
     session.draft = emptyDraft();
-    session.step = "await_service";
-    const choices = serviceChoices(shop);
-    const reply: OrchestratorReply = {
-      text: "Which service would you like?",
-      step: "await_service",
-      choices,
-      choiceMode: params.channel === "voice" ? "dtmf" : "list",
-    };
+    applyBookingExtract(shop, session, extract, text);
+    const reply = proceedBooking(shop, session, params.channel);
     session.lastPrompt = reply.text;
     saveSession(session);
     return { reply, session, shop };
@@ -673,27 +799,7 @@ export async function handleTurn(params: {
       return { reply, session, shop };
     }
     session.draft.serviceId = id;
-    if (shop.config.barbers.length > 0) {
-      session.step = "await_barber";
-      const bChoices = barberChoices(shop);
-      const reply: OrchestratorReply = {
-        text: "Any preferred barber?",
-        step: "await_barber",
-        choices: bChoices,
-        choiceMode: params.channel === "voice" ? "dtmf" : "list",
-      };
-      session.lastPrompt = reply.text;
-      saveSession(session);
-      return { reply, session, shop };
-    }
-    session.step = "await_date";
-    const dates = upcomingDateChoices(shop.config);
-    const reply: OrchestratorReply = {
-      text: "Which day works for you?",
-      step: "await_date",
-      choices: dates,
-      choiceMode: params.channel === "voice" ? "dtmf" : "list",
-    };
+    const reply = proceedBooking(shop, session, params.channel);
     session.lastPrompt = reply.text;
     saveSession(session);
     return { reply, session, shop };
@@ -714,14 +820,7 @@ export async function handleTurn(params: {
       return { reply, session, shop };
     }
     session.draft.barberId = id === "any" ? undefined : id;
-    session.step = "await_date";
-    const dates = upcomingDateChoices(shop.config);
-    const reply: OrchestratorReply = {
-      text: "Which day works for you?",
-      step: "await_date",
-      choices: dates,
-      choiceMode: params.channel === "voice" ? "dtmf" : "list",
-    };
+    const reply = proceedBooking(shop, session, params.channel);
     session.lastPrompt = reply.text;
     saveSession(session);
     return { reply, session, shop };
@@ -742,7 +841,7 @@ export async function handleTurn(params: {
       return { reply, session, shop };
     }
     session.draft.date = dateId;
-    const reply = stashAndListSlots(shop, session, dateId, params.channel);
+    const reply = proceedBooking(shop, session, params.channel);
     session.lastPrompt = reply.text;
     saveSession(session);
     return { reply, session, shop };
